@@ -1,6 +1,12 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+
+#define CHECK_CUDA(x) do { cudaError_t err = (x); if (err != cudaSuccess) { \
+  fprintf(stderr,"CUDA error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); exit(1);} } while(0)
 
 static unsigned long int next = 1;
 static unsigned long kmeans_rmax = 32767;
@@ -25,9 +31,13 @@ __global__ void assign_clusters(
     int D
 ) {
 
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // blocks_per_grid
+    // threads_per_block
+    // blockDim.x = threads_per_block
 
-    if (idx < N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x; // thread for each numpoint
+
+    if (idx < N) { // thread for each numpoint
 
         // find nearest center for points[idx]
         float min_dist = HUGE_VALF;
@@ -60,15 +70,15 @@ __global__ void update_centers(
     const float* sums,
     const int* counts,
     float* new_centers,
-    float* old_centers
+    float* old_centers,
     int K,
     int D
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (idx >= K * D) return;
+    if (idx >= K * D) return; // thread per dimension * cluster
 
-    int k = idx / D;
+    int k = idx / D; // cluster index
 
     if (counts[k] > 0) {
         new_centers[idx] = sums[idx] / counts[k];
@@ -86,7 +96,7 @@ __global__ void compute_shifts(
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (idx >= K) return;
+    if (idx >= K) return; // thread per cluster num
 
     float shift = 0.0f;
     for (int d = 0; d < D; ++d) {
@@ -134,8 +144,6 @@ int kmeans_cuda(
     }
     infile.close();
 
-    // 3시부터 5시
-
     // allocate memory for cluster centers
     std::vector<float> centers(k * dims);
 
@@ -148,26 +156,31 @@ int kmeans_cuda(
     }
     
     // copy to device
-    float *d_points, *d_centers;
+    float *d_points;
+    float *d_centers;
+
     cudaMalloc(&d_points, _numpoints * dims * sizeof(float));
     cudaMalloc(&d_centers, k * dims * sizeof(float));
 
     cudaMemcpy(d_points, points.data(), _numpoints * dims * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice);
 
-    // // prepare array to hold point labels
-    std::vector<int> labels(_numpoints, -1);
-    std::vector<float> h_shifts(k, 0.0f);
-
     // allocate device memory for labels, counts, sums, and new_centers
     int *d_labels;
     int *d_counts;
-    float *d_sums, *d_new_centers, *d_shifts;
+    float *d_sums;
+    float *d_new_centers;
+    float *d_shifts;
+
     cudaMalloc(&d_labels, _numpoints * sizeof(int));
     cudaMalloc(&d_counts, k * sizeof(int));
     cudaMalloc(&d_sums, k * dims * sizeof(float));
     cudaMalloc(&d_new_centers, k * dims * sizeof(float));
     cudaMalloc(&d_shifts, k * sizeof(float));
+
+    // prepare array to hold point labels
+    std::vector<int> labels(_numpoints, -1);
+    std::vector<float> h_shifts(k, 0.0f);
 
     // start timing
     auto start = std::chrono::steady_clock::now();
@@ -176,13 +189,19 @@ int kmeans_cuda(
     int iter_to_converge = 0;
 
     // iterations
-    while (iter_to_converge <= max_iter) {
+    while (iter_to_converge < max_iter) {
 
         // assign clusters using CUDA kernel
         int threads_per_block = 256;
-        int blocks_per_grid = (_numpoints + threads_per_block - 1) / threads_per_block; 
+        int blocks_numpoints = (_numpoints + threads_per_block - 1) / threads_per_block; 
+        int blocks_k_dims = (k * dims + threads_per_block - 1) / threads_per_block;
+        int blocks_k = (k + threads_per_block - 1) / threads_per_block;
 
-        assign_clusters<<<blocks_per_grid, threads_per_block>>>(
+        // reset counts and sums on device
+        cudaMemset(d_counts, 0, k * sizeof(int));
+        cudaMemset(d_sums, 0, k * dims * sizeof(float));
+
+        assign_clusters<<<blocks_numpoints, threads_per_block>>>(
             d_points,
             d_centers,
             d_labels,
@@ -193,7 +212,9 @@ int kmeans_cuda(
             dims
         );
 
-        update_centers<<<blocks_per_grid, threads_per_block>>>(
+        CHECK_CUDA(cudaGetLastError());
+
+        update_centers<<<blocks_k_dims, threads_per_block>>>(
             d_sums,
             d_counts,
             d_new_centers,
@@ -202,7 +223,9 @@ int kmeans_cuda(
             dims
         );
 
-        compute_shifts<<<blocks_per_grid, threads_per_block>>>(
+        CHECK_CUDA(cudaGetLastError());
+
+        compute_shifts<<<blocks_k, threads_per_block>>>(
             d_centers,
             d_new_centers,
             d_shifts,
@@ -210,8 +233,10 @@ int kmeans_cuda(
             dims
         );
 
+        CHECK_CUDA(cudaGetLastError());
+
         // copy shifts back to host
-        cudaMemcpy(h_shifts.data(), d_shifts, k * sizeof(float), cudaMemcpyDeviceToHost);
+        CHECK_CUDA(cudaMemcpy(h_shifts.data(), d_shifts, k * sizeof(float), cudaMemcpyDeviceToHost));
         float max_shift = 0.0f;
 
         for (int i = 0; i < k; ++i) {
@@ -230,13 +255,15 @@ int kmeans_cuda(
         iter_to_converge++;
     }
 
+    printf("iterations to converge: %d\n", iter_to_converge);
+
     auto end = std::chrono::steady_clock::now();
     auto total_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     auto time_per_iter_ms = (iter_to_converge > 0) ? (double)total_time_ms / iter_to_converge : 0.0;
 
     // copy data back to host
-    cudaMemcpy(labels.data(), d_labels, _numpoints * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(centers.data(), d_centers, k * dims * sizeof(float), cudaMemcpyDeviceToHost);
+    CHECK_CUDA(cudaMemcpy(labels.data(), d_labels, _numpoints * sizeof(int), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(centers.data(), d_centers, k * dims * sizeof(float), cudaMemcpyDeviceToHost));
 
     printf("%d,%lf\n", iter_to_converge, time_per_iter_ms);
 
@@ -255,11 +282,20 @@ int kmeans_cuda(
         for (int i = 0; i < k; ++i) {
             printf("%d ", i);
             for (int d = 0; d < dims; ++d) {
-                printf("%lf ", centers[i][d]);
+                printf("%f ", centers[i * dims + d]);
             }
             printf("\n");
         }
     }
+
+    // free device memory
+    cudaFree(d_points);
+    cudaFree(d_centers);
+    cudaFree(d_labels);
+    cudaFree(d_counts);
+    cudaFree(d_sums);
+    cudaFree(d_new_centers);
+    cudaFree(d_shifts);
 
     return 0;
 }

@@ -83,7 +83,7 @@ Extra_Args:
 #
 [CUDA basic]
 How_To_Compile: nvcc main.cpp kmeans_cuda.cu -O2 -o bin/kmeans_cuda -DUSE_CUDA
-Executable:
+Executable: bin/kmeans_cuda
 Extra_Args:
 
 #
