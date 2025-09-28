@@ -23,6 +23,16 @@ int kmeans_cuda(
     unsigned int seed
 );
 
+int kmeans_thrust(
+    const std::string& input_file,
+    int k,
+    int dims,
+    int max_iter,
+    double threshold,
+    bool output_centroids,
+    unsigned int seed
+);
+
 int main(int argc, char** argv) {
 
     std::string input_file;
@@ -63,6 +73,16 @@ int main(int argc, char** argv) {
 
     #ifdef USE_CUDA
     return kmeans_cuda(
+        input_file,
+        k,
+        dims,
+        max_iter,
+        threshold,
+        output_centroids,
+        seed
+    );
+    #elif defined(USE_THRUST)
+    return kmeans_thrust(
         input_file,
         k,
         dims,

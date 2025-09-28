@@ -60,15 +60,13 @@ int kmeans_cpu(
         centers[i] = points[index];
     }
 
-    auto start = std::chrono::steady_clock::now();
-
-    int iter_to_converge = 0;
-
-    // iterations
-
     // prepare array to hold point labels
     std::vector<int> labels(_numpoints, -1);
 
+    // iterations
+    int iter_to_converge = 0;
+
+    auto start = std::chrono::steady_clock::now();
     while (iter_to_converge <= max_iter) {
 
         // assign points to nearest cluster center

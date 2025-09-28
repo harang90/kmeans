@@ -5,6 +5,9 @@
 #include <cmath>
 #include <algorithm>
 
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+
 #define CHECK_CUDA(x) do { cudaError_t err = (x); if (err != cudaSuccess) { \
   fprintf(stderr,"CUDA error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); exit(1);} } while(0)
 
@@ -111,7 +114,7 @@ int kmeans_cuda(
     int k,
     int dims,
     int max_iter,
-    double threshold,
+    float threshold,
     bool output_centroids,
     unsigned int seed
 ) {
@@ -159,11 +162,11 @@ int kmeans_cuda(
     float *d_points;
     float *d_centers;
 
-    cudaMalloc(&d_points, _numpoints * dims * sizeof(float));
-    cudaMalloc(&d_centers, k * dims * sizeof(float));
+    CHECK_CUDA(cudaMalloc(&d_points, _numpoints * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_centers, k * dims * sizeof(float)));
 
-    cudaMemcpy(d_points, points.data(), _numpoints * dims * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice);
+    CHECK_CUDA(cudaMemcpy(d_points, points.data(), _numpoints * dims * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice))u;
 
     // allocate device memory for labels, counts, sums, and new_centers
     int *d_labels;
@@ -172,18 +175,22 @@ int kmeans_cuda(
     float *d_new_centers;
     float *d_shifts;
 
-    cudaMalloc(&d_labels, _numpoints * sizeof(int));
-    cudaMalloc(&d_counts, k * sizeof(int));
-    cudaMalloc(&d_sums, k * dims * sizeof(float));
-    cudaMalloc(&d_new_centers, k * dims * sizeof(float));
-    cudaMalloc(&d_shifts, k * sizeof(float));
+    CHECK_CUDA(cudaMalloc(&d_labels, _numpoints * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_counts, k * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_sums, k * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_new_centers, k * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_shifts, k * sizeof(float)));
 
     // prepare array to hold point labels
     std::vector<int> labels(_numpoints, -1);
     std::vector<float> h_shifts(k, 0.0f);
 
+    cudaEvent_t evStart, evStop;
+    CHECK_CUDA(cudaEventCreate(&evStart));
+    CHECK_CUDA(cudaEventCreate(&evStop));
+    
     // start timing
-    auto start = std::chrono::steady_clock::now();
+    CHECK_CUDA(cudaEventRecord(evStart));
 
     // iteration counter
     int iter_to_converge = 0;
@@ -198,8 +205,8 @@ int kmeans_cuda(
         int blocks_k = (k + threads_per_block - 1) / threads_per_block;
 
         // reset counts and sums on device
-        cudaMemset(d_counts, 0, k * sizeof(int));
-        cudaMemset(d_sums, 0, k * dims * sizeof(float));
+        CHECK_CUDA(cudaMemset(d_counts, 0, k * sizeof(int)));
+        CHECK_CUDA(cudaMemset(d_sums, 0, k * dims * sizeof(float)));
 
         assign_clusters<<<blocks_numpoints, threads_per_block>>>(
             d_points,
@@ -235,10 +242,13 @@ int kmeans_cuda(
 
         CHECK_CUDA(cudaGetLastError());
 
+        // synchronize to ensure all kernels are done
+        CHECK_CUDA(cudaDeviceSynchronize());
+
         // copy shifts back to host
         CHECK_CUDA(cudaMemcpy(h_shifts.data(), d_shifts, k * sizeof(float), cudaMemcpyDeviceToHost));
-        float max_shift = 0.0f;
 
+        float max_shift = 0.0f;
         for (int i = 0; i < k; ++i) {
             max_shift = std::max(max_shift, h_shifts[i]);
         }
@@ -246,19 +256,22 @@ int kmeans_cuda(
         // update centers
         std::swap(d_centers, d_new_centers);
 
+        // update iteration count
+        iter_to_converge++;
+
         // check for convergence
         if (max_shift <= threshold) {
             break;
         }
-
-        // update iteration count
-        iter_to_converge++;
     }
 
-    printf("iterations to converge: %d\n", iter_to_converge);
+    // stop timing
+    CHECK_CUDA(cudaEventRecord(evStop));
+    CHECK_CUDA(cudaEventSynchronize(evStop));
 
-    auto end = std::chrono::steady_clock::now();
-    auto total_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    auto total_time_ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&total_time_ms, evStart, evStop));
+
     auto time_per_iter_ms = (iter_to_converge > 0) ? (double)total_time_ms / iter_to_converge : 0.0;
 
     // copy data back to host
@@ -289,6 +302,8 @@ int kmeans_cuda(
     }
 
     // free device memory
+    cudaEventDestroy(evStart);
+    cudaEventDestroy(evStop);
     cudaFree(d_points);
     cudaFree(d_centers);
     cudaFree(d_labels);
