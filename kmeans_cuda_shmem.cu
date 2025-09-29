@@ -261,8 +261,8 @@ int kmeans_cuda_shmem(
         // assign clusters using CUDA kernel
         int threads_per_block = 256;
         int blocks_numpoints = (_numpoints + threads_per_block - 1) / threads_per_block; 
-        int blocks_k_dims = (k * dims + threads_per_block - 1) / threads_per_block;
-        int blocks_k = (k + threads_per_block - 1) / threads_per_block;
+        int blocks_k_dims = (K * dims + threads_per_block - 1) / threads_per_block;
+        int blocks_k = (K + threads_per_block - 1) / threads_per_block;
 
         // reset counts and sums on device
         CHECK_CUDA(cudaMemset(d_counts, 0, K * sizeof(int)));
@@ -285,6 +285,7 @@ int kmeans_cuda_shmem(
         CHECK_CUDA(cudaGetLastError());
 
         size_t reduction_shared_mem_size = K_per_tile * sizeof(int) + K_per_tile * dims * sizeof(float);
+
         per_block_shared_reduction<<<blocks_numpoints, threads_per_block, reduction_shared_mem_size>>>(
             d_points,
             d_labels,
@@ -350,7 +351,7 @@ int kmeans_cuda_shmem(
 
     // copy data back to host
     CHECK_CUDA(cudaMemcpy(labels.data(), d_labels, _numpoints * sizeof(int), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(centers.data(), d_centers, k * dims * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(centers.data(), d_centers, K * dims * sizeof(float), cudaMemcpyDeviceToHost));
 
     printf("%d,%lf\n", iter_to_converge, time_per_iter_ms);
 
@@ -366,7 +367,7 @@ int kmeans_cuda_shmem(
 
     // output cluster centers if required
     if (output_centroids) {
-        for (int i = 0; i < k; ++i) {
+        for (int i = 0; i < K; ++i) {
             printf("%d ", i);
             for (int d = 0; d < dims; ++d) {
                 printf("%f ", centers[i * dims + d]);

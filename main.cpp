@@ -31,7 +31,7 @@ int kmeans_cuda_shmem(
     float threshold,
     bool output_centroids,
     unsigned int seed
-)
+);
 
 // int kmeans_thrust(
 //     const std::string& input_file,

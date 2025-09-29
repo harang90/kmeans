@@ -166,7 +166,7 @@ int kmeans_cuda(
     CHECK_CUDA(cudaMalloc(&d_centers, k * dims * sizeof(float)));
 
     CHECK_CUDA(cudaMemcpy(d_points, points.data(), _numpoints * dims * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice))u;
+    CHECK_CUDA(cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice));
 
     // allocate device memory for labels, counts, sums, and new_centers
     int *d_labels;
