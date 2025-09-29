@@ -18,20 +18,30 @@ int kmeans_cuda(
     int k,
     int dims,
     int max_iter,
-    double threshold,
+    float threshold,
     bool output_centroids,
     unsigned int seed
 );
 
-int kmeans_thrust(
+int kmeans_cuda_shmem(
     const std::string& input_file,
-    int k,
+    int K,
     int dims,
     int max_iter,
-    double threshold,
+    float threshold,
     bool output_centroids,
     unsigned int seed
-);
+)
+
+// int kmeans_thrust(
+//     const std::string& input_file,
+//     int k,
+//     int dims,
+//     int max_iter,
+//     float threshold,
+//     bool output_centroids,
+//     unsigned int seed
+// );
 
 int main(int argc, char** argv) {
 
@@ -39,7 +49,7 @@ int main(int argc, char** argv) {
     int k = -1;
     int dims = -1;
     int max_iter = 300;
-    double threshold = 1e-6;
+    float threshold = 1e-6;
     bool output_centroids = false;
     unsigned int seed = 1;
 
@@ -81,6 +91,18 @@ int main(int argc, char** argv) {
         output_centroids,
         seed
     );
+
+    #elif defined(USE_CUDA_SHMEM)
+    return kmeans_cuda_shmem(
+        input_file,
+        k,
+        dims,
+        max_iter,
+        threshold,
+        output_centroids,
+        seed
+    );
+
     #elif defined(USE_THRUST)
     return kmeans_thrust(
         input_file,
@@ -91,13 +113,14 @@ int main(int argc, char** argv) {
         output_centroids,
         seed
     );
+
     #else
     return kmeans_cpu(
         input_file,
         k,
         dims,
         max_iter,
-        threshold,
+        static_cast<double>(threshold),
         output_centroids,
         seed
     );
