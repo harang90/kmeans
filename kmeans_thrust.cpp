@@ -9,13 +9,16 @@
 
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
-#include <thrust/transform.h>
-#include <thrust/reduce.h>
-#include <thrust/sort.h>
-#include <thrust/iterator/zip_iterator.h>
-#include <thrust/iterator/counting_iterator.h>
-#include <thrust/functional.h>
-#include <thrust/extrema.h>
+#include <thrust/sequence.h>     // thrust::sequence
+#include <thrust/copy.h>         // thrust::copy
+#include <thrust/sort.h>         // thrust::sort_by_key
+#include <thrust/gather.h>       // thrust::gather
+#include <thrust/reduce.h>       // thrust::reduce, thrust::reduce_by_key
+#include <thrust/transform.h>    // thrust::transform
+#include <thrust/scatter.h>      // thrust::scatter (if you use it instead of CPU loop)
+#include <thrust/iterator/counting_iterator.h>  // counting iterators
+#include <thrust/fill.h>        // thrust::fill
+#include <thrust/functional.h>  // thrust::maximum<T>
 
 // Random number generator functions
 static unsigned long int next = 1;
@@ -49,7 +52,7 @@ struct assign_cluster_functor {
         for (int k = 0; k < K; ++k) {
             float dist = 0.0f;
             for (int d = 0; d < dims; ++d) {
-                float diff = points[point_idx * dims + d] - centers[k * dims + d];
+                float diff = points[d * numpoints + point_idx] - centers[k * dims + d];
                 dist += diff * diff;
             }
             if (dist < min_dist) {
@@ -73,15 +76,17 @@ struct update_centers_functor {
         : K(_K), dims(_dims), counts(_counts), sums(_sums), centers(_centers) {}
 
     __host__ __device__
-    float operator()(int idx) const {
+    float operator()(int idx) const { // idx = per K * dims
         int cluster = idx / dims; // idx / dims gives cluster index
+        int dimension = idx % dims;
+        float sum_dimension = sums[dimension * K + cluster];
         if (counts[cluster] > 0) {
-            return sums[idx] / counts[cluster]; // Retruns average
+            return (sum_dimension / static_cast<float>(counts[cluster])); // Retruns average
         } else {
             return centers[idx];  // Keep old center if no points assigned
         }
     }
-}
+};
 
 // Functor to compute shift per cluster
 struct compute_shift_functor {
@@ -133,7 +138,7 @@ int kmeans_thrust(
         int index;
         infile >> index;
         for (int j = 0; j < dims; ++j) {
-            infile >> points[i * dims + j];
+            infile >> points[j * _numpoints + i];
         }
     }
     infile.close();
@@ -145,7 +150,7 @@ int kmeans_thrust(
     for (int i = 0; i < K; ++i) {
         int index = kmeans_rand() % _numpoints;
         for (int d = 0; d < dims; ++d) {
-            centers[i * dims + d] = points[index * dims + d];
+            centers[i * dims + d] = points[d * _numpoints + index];
         }
     }
 
@@ -238,9 +243,9 @@ int kmeans_thrust(
         }
 
         // Step 4: Compute new cluster centers (just get average from sum / count)
-        counts_ptr = thrust::raw_pointer_cast(d_counts.data());
-        sums_ptr = thrust::raw_pointer_cast(d_sums.data());
-        old_centers_ptr = thrust::raw_pointer_cast(d_centers.data());
+        const int*   counts_ptr      = thrust::raw_pointer_cast(d_counts.data());
+        const float* sums_ptr        = thrust::raw_pointer_cast(d_sums.data());
+        const float* old_centers_ptr = thrust::raw_pointer_cast(d_centers.data());
 
         thrust::transform(
             thrust::counting_iterator<int>(0), // from 0 to K*dims

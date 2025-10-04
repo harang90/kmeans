@@ -91,12 +91,7 @@ Extra_Args:
 # using Shared Memory
 #
 [CUDA shared]
-<<<<<<< Updated upstream
-How_To_Compile: nvcc main.cpp kmeans_cuda_shmem.cu -O2 -o bin/kmeans_cuda_shmem -DUSE_CU
-DA_SHMEM
-=======
 How_To_Compile: nvcc main.cpp kmeans_cuda_shmem.cu -O2 -o bin/kmeans_cuda_shmem -DUSE_CUDA_SHMEM
->>>>>>> Stashed changes
 Executable: bin/kmeans_cuda_shmem
 Extra_Args:
 
