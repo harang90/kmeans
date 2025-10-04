@@ -33,15 +33,15 @@ int kmeans_cuda_shmem(
     unsigned int seed
 );
 
-// int kmeans_thrust(
-//     const std::string& input_file,
-//     int k,
-//     int dims,
-//     int max_iter,
-//     float threshold,
-//     bool output_centroids,
-//     unsigned int seed
-// );
+int kmeans_thrust(
+    const std::string& input_file,
+    int k,
+    int dims,
+    int max_iter,
+    float threshold,
+    bool output_centroids,
+    unsigned int seed
+);
 
 int main(int argc, char** argv) {
 
