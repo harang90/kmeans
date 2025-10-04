@@ -61,6 +61,28 @@ struct assign_cluster_functor {
     }
 };
 
+// Functor to compute new cluster centers
+struct update_centers_functor {
+    const int K;
+    const int dims;
+    const int* counts;
+    const float* sums;
+    const float* centers;
+
+    update_centers_functor(const int _K, const int _dims, const int* _counts, const float* _sums, const float* _centers)
+        : K(_K), dims(_dims), counts(_counts), sums(_sums), centers(_centers) {}
+
+    __host__ __device__
+    float operator()(int idx) const {
+        int cluster = idx / dims; // idx / dims gives cluster index
+        if (counts[cluster] > 0) {
+            return sums[idx] / counts[cluster]; // Retruns average
+        } else {
+            return centers[idx];  // Keep old center if no points assigned
+        }
+    }
+}
+
 // Functor to compute shift per cluster
 struct compute_shift_functor {
     const float* old_centers;
@@ -163,83 +185,76 @@ int kmeans_thrust(
         );
 
         // Step 2: Sort points by cluster assignment for efficient reduction
-        thrust::sequence(d_point_indices.begin(), d_point_indices.end());
+        thrust::sequence(d_point_indices.begin(), d_point_indices.end()); // 0, 1, 2, ..., _numpoints-1
         thrust::copy(d_labels.begin(), d_labels.end(), d_sorted_labels.begin());
         thrust::copy(d_point_indices.begin(), d_point_indices.end(), d_sorted_indices.begin());
-        
-        thrust::sort_by_key(d_sorted_labels.begin(), d_sorted_labels.end(), d_sorted_indices.begin());
 
-        // Rearrange points according to sorted indices
+        thrust::sort_by_key(d_sorted_labels.begin(), d_sorted_labels.end(), d_sorted_indices.begin()); // Sort indices based on labels
+
+        // Rearrange points according to sorted indices to make cluster-wise access
         for (int d = 0; d < dims; ++d) {
-            thrust::gather(
-                d_sorted_indices.begin(), d_sorted_indices.end(),
-                d_points.begin() + d * _numpoints,
-                d_sorted_points.begin() + d * _numpoints
+            thrust::gather( // output[i] = input[sorted_indices[i]]
+                d_sorted_indices.begin(), d_sorted_indices.end(), // indices based on sorted labels
+                d_points.begin() + d * _numpoints, // original points for dimension d
+                d_sorted_points.begin() + d * _numpoints // sorted points for dimension d
             );
         }
 
         // Step 3: Count points per cluster and compute sums
-        thrust::fill(d_counts.begin(), d_counts.end(), 0);
-        thrust::fill(d_sums.begin(), d_sums.end(), 0.0f);
+        thrust::fill(d_counts.begin(), d_counts.end(), 0); // Reset counts
+        thrust::fill(d_sums.begin(), d_sums.end(), 0.0f); // Reset sums
 
         // Use reduce_by_key to count points per cluster
         thrust::device_vector<int> unique_labels(K);
         thrust::device_vector<int> ones(_numpoints, 1);
         thrust::device_vector<int> cluster_counts(K);
-        
-        auto end_pair = thrust::reduce_by_key(
-            d_sorted_labels.begin(), d_sorted_labels.end(),
-            ones.begin(),
-            unique_labels.begin(),
-            cluster_counts.begin()
+
+        auto end_pair = thrust::reduce_by_key( // Count points per cluster
+            d_sorted_labels.begin(), d_sorted_labels.end(), // keys
+            ones.begin(), // values to sum
+            unique_labels.begin(), // output for unique keys
+            cluster_counts.begin() // output for counts - reduce result
         );
+        int num_unique = end_pair.first - unique_labels.begin();
         
         // Copy counts to the right positions
-        for (int i = 0; i < end_pair.first - unique_labels.begin(); ++i) {
-            d_counts[unique_labels[i]] = cluster_counts[i];
-        }
+        thrust::scatter(cluster_counts.begin(), cluster_counts.begin() + num_unique, unique_labels.begin(), d_counts.begin());
 
         // Compute coordinate sums for each cluster and dimension
-        for (int d = 0; d < dims; ++d) {
+        for (int d = 0; d < dims; ++d) { // for each dimension d
             thrust::device_vector<float> coord_sums(K, 0.0f);
             thrust::device_vector<int> temp_labels(K);
             
-            auto sum_end = thrust::reduce_by_key(
-                d_sorted_labels.begin(), d_sorted_labels.end(),
-                d_sorted_points.begin() + d * _numpoints,
-                temp_labels.begin(),
-                coord_sums.begin()
+            auto sum_end = thrust::reduce_by_key( // Sum coordinates per cluster
+                d_sorted_labels.begin(), d_sorted_labels.end(), // keys
+                d_sorted_points.begin() + d * _numpoints, // values to sum
+                temp_labels.begin(), // output for unique keys
+                coord_sums.begin() // sum result
             );
+            int num_sums = sum_end.first - temp_labels.begin();
             
             // Copy sums to the right positions
-            for (int i = 0; i < sum_end.first - temp_labels.begin(); ++i) {
-                d_sums[temp_labels[i] * dims + d] = coord_sums[i];
-            }
+            thrust::scatter(coord_sums.begin(), coord_sums.begin() + num_sums, temp_labels.begin(), d_sums.begin() + d * K); // d * K = offset for dimension d
         }
 
-        // Step 4: Compute new cluster centers
+        // Step 4: Compute new cluster centers (just get average from sum / count)
+        counts_ptr = thrust::raw_pointer_cast(d_counts.data());
+        sums_ptr = thrust::raw_pointer_cast(d_sums.data());
+        old_centers_ptr = thrust::raw_pointer_cast(d_centers.data());
+
         thrust::transform(
-            thrust::counting_iterator<int>(0),
-            thrust::counting_iterator<int>(K * dims),
-            d_new_centers.begin(),
-            [K, dims, counts_ptr = thrust::raw_pointer_cast(d_counts.data()),
-             sums_ptr = thrust::raw_pointer_cast(d_sums.data()),
-             old_centers_ptr = thrust::raw_pointer_cast(d_centers.data())] __host__ __device__ (int idx) -> float {
-                int cluster = idx / dims;
-                if (counts_ptr[cluster] > 0) {
-                    return sums_ptr[idx] / counts_ptr[cluster];
-                } else {
-                    return old_centers_ptr[idx];  // Keep old center if no points assigned
-                }
-            }
+            thrust::counting_iterator<int>(0), // from 0 to K*dims
+            thrust::counting_iterator<int>(K * dims), // for every dimension in each cluster, do the functor
+            d_new_centers.begin(), // output
+            update_centers_functor(K, dims, counts_ptr, sums_ptr, old_centers_ptr) // returns average
         );
 
         // Step 5: Compute cluster shifts
         thrust::transform(
             thrust::counting_iterator<int>(0),
-            thrust::counting_iterator<int>(K),
+            thrust::counting_iterator<int>(K), // for every K
             d_shifts.begin(),
-            compute_shift_functor(
+            compute_shift_functor( // calculate d_shift given cluster k
                 thrust::raw_pointer_cast(d_centers.data()),
                 thrust::raw_pointer_cast(d_new_centers.data()),
                 dims
