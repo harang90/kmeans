@@ -89,7 +89,7 @@ Extra_Args:
 # using Shared Memory
 #
 [CUDA shared]
-How_To_Compile: nvcc main.cpp kmeans_cuda_shmem.cu -O2 -o bin/kmeans_cuda_shmem -DUSE_CUDA_SHMEM
+How_To_Compile: nvcc main.cpp kmeans_cuda_shmem.cu -O2 -o bin/kmeans_cuda_shmem -DUSE_CUDA_SHMEM -arch=sm_75
 Executable: bin/kmeans_cuda_shmem
 Extra_Args:
 
