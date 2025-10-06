@@ -80,7 +80,7 @@ Extra_Args:
 # using CUDA
 #
 [CUDA basic]
-How_To_Compile: nvcc main.cpp kmeans_cuda.cu -O2 -o bin/kmeans_cuda -DUSE_CUDA
+How_To_Compile: nvcc main.cpp kmeans_cuda.cu -O2 -o bin/kmeans_cuda -DUSE_CUDA -arch=sm_75
 Executable: bin/kmeans_cuda
 Extra_Args:
 

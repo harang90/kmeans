@@ -18,7 +18,7 @@ int kmeans_cuda(
     int k,
     int dims,
     int max_iter,
-    float threshold,
+    double threshold,
     bool output_centroids,
     unsigned int seed
 );
