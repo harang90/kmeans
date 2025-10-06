@@ -52,7 +52,7 @@ __global__ void assign_clusters(
                 float diff = points[idx * D + d] - centers[j * D + d];
                 dist += diff * diff;
             }
-            if (dist < min_dist || isnan(min_dist)) {
+            if (!isnan(min_dist) && dist < min_dist) {
                 min_dist = dist;
                 best_center = j;
             }
@@ -77,7 +77,8 @@ __global__ void accumulate(
     if (idx < N) {
 
         int label = labels[idx];
-
+        if (label < 0 || label >= K) return;
+        
         // accumulate counts for each cluster
         atomicAdd(&counts[label], 1);
 
@@ -220,12 +221,12 @@ int kmeans_cuda(
         // assign clusters using CUDA kernel
         int threads_per_block = 256;
         int blocks_numpoints = (_numpoints + threads_per_block - 1) / threads_per_block; 
-        int blocks_k_dims = (k * dims + threads_per_block - 1) / threads_per_block;
-        int blocks_k = (k + threads_per_block - 1) / threads_per_block;
+        int blocks_k_dims = (K * dims + threads_per_block - 1) / threads_per_block;
+        int blocks_k = (K + threads_per_block - 1) / threads_per_block;
 
         // reset counts and sums on device
-        CHECK_CUDA(cudaMemset(d_counts, 0, k * sizeof(int)));
-        CHECK_CUDA(cudaMemset(d_sums, 0, k * dims * sizeof(float)));
+        CHECK_CUDA(cudaMemset(d_counts, 0, K * sizeof(int)));
+        CHECK_CUDA(cudaMemset(d_sums, 0, K * dims * sizeof(float)));
 
         assign_clusters<<<blocks_numpoints, threads_per_block>>>(
             d_points,
@@ -234,7 +235,19 @@ int kmeans_cuda(
             d_counts,
             d_sums,
             _numpoints,
-            k,
+            K,
+            dims
+        );
+        CHECK_CUDA(cudaGetLastError());
+
+        accumulate<<<blocks_numpoints, threads_per_block>>>(
+            d_points,
+            d_centers,
+            d_labels,
+            d_counts,
+            d_sums,
+            _numpoints,
+            K,
             dims
         );
         CHECK_CUDA(cudaGetLastError());
@@ -244,7 +257,7 @@ int kmeans_cuda(
             d_counts,
             d_new_centers,
             d_centers,
-            k,
+            K,
             dims
         );
         CHECK_CUDA(cudaGetLastError());
@@ -253,7 +266,7 @@ int kmeans_cuda(
             d_centers,
             d_new_centers,
             d_shifts,
-            k,
+            K,
             dims
         );
         CHECK_CUDA(cudaGetLastError());
@@ -262,10 +275,10 @@ int kmeans_cuda(
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // copy shifts back to host
-        CHECK_CUDA(cudaMemcpy(h_shifts.data(), d_shifts, k * sizeof(float), cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_shifts.data(), d_shifts, K * sizeof(float), cudaMemcpyDeviceToHost));
 
         float max_shift = 0.0f;
-        for (int i = 0; i < k; ++i) {
+        for (int i = 0; i < K; ++i) {
             max_shift = std::max(max_shift, h_shifts[i]);
         }
 
@@ -292,7 +305,7 @@ int kmeans_cuda(
 
     // copy data back to host
     CHECK_CUDA(cudaMemcpy(labels.data(), d_labels, _numpoints * sizeof(int), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(centers.data(), d_centers, k * dims * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(centers.data(), d_centers, K * dims * sizeof(float), cudaMemcpyDeviceToHost));
 
     printf("%d,%lf\n", iter_to_converge, time_per_iter_ms);
 
@@ -308,7 +321,7 @@ int kmeans_cuda(
 
     // output cluster centers if required
     if (output_centroids) {
-        for (int i = 0; i < k; ++i) {
+        for (int i = 0; i < K; ++i) {
             printf("%d ", i);
             for (int d = 0; d < dims; ++d) {
                 printf("%f ", centers[i * dims + d]);
