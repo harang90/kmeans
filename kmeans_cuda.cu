@@ -25,11 +25,11 @@ void kmeans_srand(unsigned int seed) {
 }
 
 __global__ void assign_clusters(
-    const float* points,
-    const float* centers,
-    int* labels,
-    int* counts,
-    float* sums,
+    const float* __restrict__ points,
+    const float* __restrict__ centers,
+    int* __restrict__ labels,
+    int* __restrict__ counts,
+    float* __restrict__ sums,
     int N,
     int K,
     int D
@@ -58,15 +58,33 @@ __global__ void assign_clusters(
             }
         }
         labels[idx] = best_center;
+    }
+}
+
+__global__ void accumulate(
+    const float* __restrict__ points,
+    const float* __restrict__ centers,
+    int* __restrict__ labels,
+    int* __restrict__ counts,
+    float* __restrict__ sums,
+    int N,
+    int K,
+    int D
+) {
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x; // thread for each numpoint
+
+    if (idx < N) {
+
+        int label = labels[idx];
 
         // accumulate counts for each cluster
-        atomicAdd(&counts[best_center], 1);
+        atomicAdd(&counts[label], 1);
 
         // accumulate sums for each cluster
         for (int d = 0; d < D; ++d) {
-            atomicAdd(&sums[best_center * D + d], points[idx * D + d]);
+            atomicAdd(&sums[label * D + d], points[idx * D + d]);
         }
-
     }
 }
 
@@ -112,7 +130,7 @@ __global__ void compute_shifts(
 
 int kmeans_cuda(
     const std::string& input_file,
-    int k,
+    int K,
     int dims,
     int max_iter,
     float threshold,
@@ -149,10 +167,10 @@ int kmeans_cuda(
     infile.close();
 
     // allocate memory for cluster centers
-    std::vector<float> centers(k * dims);
+    std::vector<float> centers(K * dims);
 
-    // initialize cluster centers by randomly selecting k points
-    for (int i = 0; i < k; ++i) {
+    // initialize cluster centers by randomly selecting K points
+    for (int i = 0; i < K; ++i) {
         int index = kmeans_rand() % _numpoints;
         for (int d = 0; d < dims; ++d) {
             centers[i * dims + d] = points[index * dims + d];
@@ -164,10 +182,10 @@ int kmeans_cuda(
     float *d_centers;
 
     CHECK_CUDA(cudaMalloc(&d_points, _numpoints * dims * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_centers, k * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_centers, K * dims * sizeof(float)));
 
     CHECK_CUDA(cudaMemcpy(d_points, points.data(), _numpoints * dims * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_centers, centers.data(), k * dims * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_centers, centers.data(), K * dims * sizeof(float), cudaMemcpyHostToDevice));
 
     // allocate device memory for labels, counts, sums, and new_centers
     int *d_labels;
@@ -177,14 +195,14 @@ int kmeans_cuda(
     float *d_shifts;
 
     CHECK_CUDA(cudaMalloc(&d_labels, _numpoints * sizeof(int)));
-    CHECK_CUDA(cudaMalloc(&d_counts, k * sizeof(int)));
-    CHECK_CUDA(cudaMalloc(&d_sums, k * dims * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_new_centers, k * dims * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_shifts, k * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_counts, K * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_sums, K * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_new_centers, K * dims * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_shifts, K * sizeof(float)));
 
     // prepare array to hold point labels
     std::vector<int> labels(_numpoints, -1);
-    std::vector<float> h_shifts(k, 0.0f);
+    std::vector<float> h_shifts(K, 0.0f);
 
     cudaEvent_t evStart, evStop;
     CHECK_CUDA(cudaEventCreate(&evStart));
@@ -252,7 +270,7 @@ int kmeans_cuda(
         }
 
         // update centers
-        std::swap(d_centers, d_new_centers);
+        CHECK_CUDA(cudaMemcpy(d_centers, d_new_centers, K * dims * sizeof(float), cudaMemcpyDeviceToDevice));
 
         // update iteration count
         iter_to_converge++;

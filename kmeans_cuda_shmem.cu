@@ -329,7 +329,7 @@ int kmeans_cuda_shmem(
         }
 
         // update centers
-        std::swap(d_centers, d_new_centers);
+        CHECK_CUDA(cudaMemcpy(d_centers, d_new_centers, K * dims * sizeof(float), cudaMemcpyDeviceToDevice));
 
         // update iteration count
         iter_to_converge++;
