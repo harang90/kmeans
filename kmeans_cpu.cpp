@@ -1,6 +1,12 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <vector>
+#include <string>
+#include <limits>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 
 static unsigned long int next = 1;
 static unsigned long kmeans_rmax = 32767;
@@ -67,7 +73,7 @@ int kmeans_cpu(
     int iter_to_converge = 0;
 
     auto start = std::chrono::steady_clock::now();
-    while (iter_to_converge <= max_iter) {
+    while (iter_to_converge < max_iter) {
 
         // assign points to nearest cluster center
         for (int i = 0; i < _numpoints; ++i) {

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <vector>
 #include <cmath>
+#include <math_constants.h>
 #include <algorithm>
 
 #include <cuda_runtime.h>
@@ -43,15 +44,15 @@ __global__ void assign_clusters(
     if (idx < N) { // thread for each numpoint
 
         // find nearest center for points[idx]
-        float min_dist = HUGE_VALF;
-        int best_center = -1;
+        float min_dist = CUDART_INF_F;
+        int best_center = 0;
         for (int j = 0; j < K; ++j) {
             float dist = 0.0f;
             for (int d = 0; d < D; ++d) {
                 float diff = points[idx * D + d] - centers[j * D + d];
                 dist += diff * diff;
             }
-            if (dist < min_dist) {
+            if (dist < min_dist || isnan(min_dist)) {
                 min_dist = dist;
                 best_center = j;
             }
@@ -218,7 +219,6 @@ int kmeans_cuda(
             k,
             dims
         );
-
         CHECK_CUDA(cudaGetLastError());
 
         update_centers<<<blocks_k_dims, threads_per_block>>>(
@@ -229,7 +229,6 @@ int kmeans_cuda(
             k,
             dims
         );
-
         CHECK_CUDA(cudaGetLastError());
 
         compute_shifts<<<blocks_k, threads_per_block>>>(
@@ -239,7 +238,6 @@ int kmeans_cuda(
             k,
             dims
         );
-
         CHECK_CUDA(cudaGetLastError());
 
         // synchronize to ensure all kernels are done

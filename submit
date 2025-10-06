@@ -66,14 +66,12 @@ How_To_Compile: g++ main.cpp kmeans_cpu.cpp -O2 -o bin/kmeans_cpu
 Executable: bin/kmeans_cpu
 Extra_Args:
 
-# bin/kmeans_cpu -k 16 -d 16 -i input/random-n2048-d16-c16.txt -s 8675309 -c -m 500 -t 1e-6
-
 #
 # Specification for GPU implementation of kmeans
 # using Thrust
 #
 [Thrust]
-How_To_Compile: nvcc main.cpp kmeans_thrust.cpp -O2 -o bin/kmeans_thrust -DUSE_THRUST
+How_To_Compile: nvcc main.cpp kmeans_thrust.cu -O2 -o bin/kmeans_thrust -DUSE_THRUST
 Executable: bin/kmeans_thrust
 Extra_Args:
 
